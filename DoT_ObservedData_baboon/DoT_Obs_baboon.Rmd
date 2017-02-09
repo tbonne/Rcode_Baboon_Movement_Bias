@@ -1,0 +1,220 @@
+---
+title: "DoT using observed data: estimating movement bias in a mobile social troop"
+output:
+  html_document: default
+  html_notebook: default
+---
+
+```{r, include = F}
+#load libraries
+library(rethinking)
+```
+
+#Fitting the Direction matching models with MAP
+
+Fitting full model
+```{r}
+###map approach
+move.data <- read.csv("data/tradjectoryOUT_id13.csv", header = T) #for each id the models need to be adjusted to remove their columns
+
+
+data.sub<-data.frame(dobs=move.data$d.obs,
+                     bearing=move.data$d.bearing,
+                     cv=move.data$d.resultant,
+                     d0=move.data$d.0,
+                     d1=move.data$d.1,
+                     d2=move.data$d.2,
+                     d3=move.data$d.3,
+                     d4=move.data$d.4,
+                     d5=move.data$d.5,
+                     d6=move.data$d.6,
+                     d7=move.data$d.7,
+                     d8=move.data$d.8,
+                     d9=move.data$d.9,
+                     d11=move.data$d.11,
+                     d12=move.data$d.12
+                     #d13=move.data$d.13
+)
+
+data.sub<-data.sub[complete.cases(data.sub),]
+
+bearing_prior = acf(move.data$d.bearing, lag.max = 1, plot = F)[[1]][2]
+sigma_prior = sd(data.sub$dobs)
+
+start_list <- list(
+b=bearing_prior,
+c=0,
+sigma=sigma_prior,
+c0=0,
+c1=0,
+c2=0,
+c3=0,
+c4=0,
+c5=0,
+c6=0,
+c7=0,
+c8=0,
+c9=0,
+c11=0,
+c12=0
+#c13=0
+)
+
+m.obs <- map(
+  alist(
+    dobs ~ dnorm(mu,sigma) , 
+    mu <- b*bearing + c*cv+ c0*d0 + c1*d1 + c2*d2 + c3*d3 + c4*d4 + c5*d5 + c6*d6 + c7*d7 + c8*d8 + c9*d9 + c11*d11 + c12*d12 ,
+    b ~ dnorm(bearing_prior,0.5) ,
+    c ~ dnorm(0,0.1) ,
+    c0 ~ dnorm(0,0.1) ,
+    c1 ~ dnorm(0,0.1) ,
+    c2 ~ dnorm(0,0.1) ,
+    c3 ~ dnorm(0,0.1) ,
+    c4 ~ dnorm(0,0.1) ,
+    c5 ~ dnorm(0,0.1) ,
+    c6 ~ dnorm(0,0.1) ,
+    c7 ~ dnorm(0,0.1) ,
+    c8 ~ dnorm(0,0.1) ,
+    c9 ~ dnorm(0,0.1) ,
+    c11 ~ dnorm(0,0.1) ,
+    c12 ~ dnorm(0,0.1) ,
+    #c13 ~ dnorm(0,0.1) ,
+    sigma ~ dcauchy(sigma_prior,0.5) 
+  ),
+  data=data.sub, start = start_list)
+
+precis(m.obs,digits = 4,prob=0.99)
+#plot(precis(m.obs,prob=0.99))
+#postcheck(m.obs, window = 50)
+#pairs(m.obs)
+
+#post<-extract.samples(m.obs)
+#HPDI(post$c5,prob = 0.99)
+
+```
+
+Fitting the group center model
+```{r}
+data.sub.cv <- data.frame(dobs = data.sub$dobs, bearing = data.sub$bearing, cv = data.sub$cv)
+
+start_list <- list(
+b=bearing_prior,
+c=0,
+sigma=sigma_prior
+)
+
+m.obs.cv <- map(
+  alist(
+    dobs ~ dnorm(mu,sigma) , 
+    mu <- b*bearing + c*cv ,
+    b ~ dnorm(bearing_prior,0.5) ,
+    c ~ dnorm(0,0.1) ,
+    sigma ~ dcauchy(sigma_prior,0.5) 
+  ),
+  data=data.sub.cv, start = start_list)
+
+precis(m.obs.cv,digits = 4,prob=0.99)
+#plot(precis(m.obs,prob=0.99))
+#postcheck(m.obs, window = 50)
+#pairs(m.obs)
+
+#post<-extract.samples(m.obs)
+#HPDI(post$c5,prob = 0.99)
+```
+
+Comparing the center only model to the full model (WAIC)
+```{r}
+#plot(rethinking::compare(m.obs,m.obs.cv))
+rethinking::compare(m.obs,m.obs.cv)
+#LOO(m.obs)
+#WAIC(m.obs)
+
+```
+
+Explained variance
+```{r}
+#generate posterior sampling
+postSamples <- 10000
+post<-extract.samples(m.obs,n=postSamples)
+
+#calculate preditction error at the level of the data point
+var.est <- data.frame(var=rep(0,postSamples))
+for(i in 1:postSamples){
+  data.sub$pred <- post$b[i]*data.sub$bearing + post$c[i]*data.sub$cv + post$c0[i]*data.sub$d0 + post$c1[i]*data.sub$d1 + post$c2[i]*data.sub$d2 + post$c3[i]*data.sub$d3 + post$c4[i]*data.sub$d4 + post$c5[i]*data.sub$d5 + post$c6[i]*data.sub$d6 + post$c7[i]*data.sub$d7 + post$c8[i]*data.sub$d8 + post$c9[i]*data.sub$d9 + post$c11[i]*data.sub$d11 + post$c12[i]*data.sub$d12
+  data.sub$error<- data.sub$dobs-data.sub$pred
+  var.est[i,1] <- var(data.sub$error)
+}
+
+r.square.1 <- 1-mean(var.est[,1])/var(data.sub$dobs)
+r.square.1 #0.38 all, #0.06 individuals only
+
+
+#generate posterior sampling
+post<-extract.samples(m.obs.cv,n=postSamples)
+
+#calculate preditction error at the level of the data point
+var.est.cv <- data.frame(var=rep(0,postSamples))
+for(i in 1:postSamples){
+  data.sub$pred <- post$b[i]*data.sub$bearing + post$c[i]*data.sub$cv 
+  data.sub$error<- data.sub$dobs-data.sub$pred
+  var.est.cv[i,1] <- var(data.sub$error)
+}
+
+r.square.2 <- 1-mean(var.est.cv[,1])/var(data.sub$dobs)
+r.square.2 
+
+```
+
+#Extract values for figure 2 taking into account uncertainties
+```{r}
+postSamples <- 10000
+post<-extract.samples(m.obs,n=postSamples)
+
+b.ci<-HPDI(post$b,prob = c(0.99))
+b.mean <-mean(post$b)
+
+
+c.ci<-HPDI(post$c,prob = c(0.99))
+c.mean<-mean(post$c)
+
+
+so.ci<-HPDI(0+
+       post$c0+
+       post$c1+
+       post$c2+
+       post$c3+
+       post$c4+
+       post$c5+
+       post$c6+
+       post$c7+
+       post$c8+
+       post$c9+
+       post$c11+
+       post$c12,prob=0.99)
+       #post$c13, 
+       
+
+so.mean <- mean(0+
+       post$c0+
+       post$c1+
+       post$c2+
+       post$c3+
+       post$c4+
+       post$c5+
+       post$c6+
+       post$c7+
+       post$c8+
+       post$c9+
+       post$c11+
+       post$c12)
+       #post$c13)
+
+id <- 13
+influence.coef<-data.frame(coef.mean=b.mean,coef.uci=b.ci[1],coef.lci=b.ci[2],infType="b",ID=id)
+df<-data.frame(coef.mean=c.mean,coef.uci=c.ci[1],coef.lci=c.ci[2],infType="c",ID=id)
+influence.coef <- rbind(influence.coef,df)
+df<-data.frame(coef.mean=so.mean,coef.uci=so.ci[1],coef.lci=so.ci[2],infType="so",ID=id)
+influence.coef <- rbind(influence.coef,df)
+influence.coef
+```
+

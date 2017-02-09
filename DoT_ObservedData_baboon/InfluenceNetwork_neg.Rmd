@@ -1,0 +1,159 @@
+---
+title: "Social structure in observed negative movement bias"
+output: html_notebook
+---
+
+```{r, include=FALSE}
+library(reshape2)
+library(lme4)
+library(sjPlot)
+library(effects)
+library(MuMIn)
+library(qgraph)
+library(igraph)
+```
+
+
+
+1) Visualize the network of influence amoung individuals in the group (influence estimated by Direction Matching)
+
+```{r}
+a.s <- read.csv("data/influence_net_obs_neg.csv", header=T,row.names=1)   
+m.a<-as.matrix(a.s)
+
+#full
+gg<-qgraph((m.a))
+
+```
+
+
+
+1) Compare centrality of individuals in the group. Individuals are coded now as Male (M) or Female (F) and a rank score (e.g., top ranking female: F1)
+
+```{r}
+gr<-as.igraph(gg)
+dat <- data.frame(name=c("M2","F11",  "F2",  "F9",  "F4",	"F10",	"F8",	"F7",	"F6",	"F1",	"M1",	"F5",	"F3"))
+dat$rank =              c(2,13,4,11,6,12,10,9,8,3,1,7,5)
+dat$InStrength <- strength(gr,mode="in")
+dat$OutStrength <- strength(gr,mode="out")
+#dat$Betweenness <- betweenness(gr,directed = T, weights=1/E(gr)$weight)
+dat$alphaC <- alpha.centrality(gr)
+datO <- dat[order(dat$rank),]
+dat2<- melt(datO[,-2], id = "name")
+positions <- c("M1","M2",  "F1",  "F2",  "F3",	"F4",	"F5",	"F6",	"F7",	"F8",	"F9",	"F10",	"F11")
+g <- ggplot(dat2, aes(x = value, y = name, group = variable))+
+  geom_point() +
+  geom_path() +
+  facet_grid(~variable, scales = "free") +
+  scale_y_discrete(limits=positions)+theme_bw() + ylab("Individual") + xlab("values")
+g
+```
+
+3)  Estimate the influence structure of the group using core periphery algorithms
+
+```{r, include=FALSE}
+#some functions that we will need
+
+k.core.weighted <- function (graphIn){
+  
+  coreTest<-data.frame(id<-as.numeric(),ki<-as.numeric())
+  colnames(coreTest)<-c("id","ki")
+  ids <- c(0,1,2,3,4,5,6,7,8,9,11,12,13)
+  
+  #calculate ki
+  kw <-0
+  for (i in 1:13){
+    if(i==13){
+      coreTest <- rbind(coreTest,c(ids[1],kw))
+    }else{
+      #print(E(graphIn))
+      str.nodes<-strength(graphIn,mode="in")
+      str.nodes<-(str.nodes/mean(str.nodes))
+      str.nodes<-round(str.nodes+1)#/min(str.nodes))
+      d.nodes<-degree(graphIn,mode="in")
+      ki <- (d.nodes*str.nodes)^0.5 
+      graph.node <- which(ki==min(ki),arr.ind = T)
+      minID <- ids[graph.node[1]]
+      ids <- ids[-graph.node[1]]
+      minK <- ki[graph.node[1]]
+      if(is.na(minK)){minK=0} #no connections
+      if(is.na(kw)){kw=0} #no connections
+      if(kw<minK){kw=minK}
+      coreTest <- rbind(coreTest,c(minID,kw))
+      if(is.na(graph.node[1])){graph.node[1]=1} #no connections
+      graphIn<-delete.vertices(graphIn,graph.node[1])
+      #plot(graphIn)
+    }
+  }
+  colnames(coreTest)<-c("id","ki")
+  coreTest  
+  
+}
+
+core.dist <- function(corInd){
+  c.d<-0
+  for(j in 1:length(corInd)){
+    for (k in 1:length(corInd)){
+      c.d <- c.d + abs(corInd[j]-corInd[k]) 
+    }
+  }
+  c.d
+}
+
+```
+
+
+```{r}
+gg.i<-as.igraph(gg)
+rdg.c<-k.core.weighted(gg.i) #function k.core.weighted is at the end of the code
+rdg.c<-rdg.c[order(rdg.c$id),]
+coreInd.w <- rdg.c[,2]
+gg<-qgraph((m.a),groups=factor(coreInd.w),nodeNames=c("Kenny","Alice",  "Alison",  "Catherine",  "Christina",	"Jane",	"Lynn",	"Olga",	"Rushenka",	"Sarah",	"Troy",	"Ulrike",	"Vickie"))
+
+obs.dist<-core.dist(coreInd.w)
+```
+
+
+3.1)  Test the probability that the observed structure could be due to chance (permutation of edges).
+
+```{r}
+
+edeg <- length(E(gg.i))
+coreIndex<-data.frame(index<-as.numeric())
+coreRand<-data.frame(rn<-as.numeric())
+
+for(i in 1:1000){ #this can be increased (takes a while at 10,000)
+  rdg <- sample_gnm(13, edeg, directed = T,loops = F)
+  E(rdg)$weight=sample(E(gg.i)$weight) #remove this line to compare non-weighted permutations to the observations
+  
+  rdg.c <- k.core.weighted(rdg)
+  rdg.c <- rdg.c[,2]
+  
+  coreRand <- rbind(rdg.c,coreRand)
+  core.test <-0
+  
+  for(j in 1:length(rdg.c)){
+    for (k in 1:length(rdg.c)){
+      core.test <- core.test + abs(rdg.c[j]-rdg.c[k]) 
+    }
+  }
+  coreIndex <- rbind(core.test,coreIndex)
+}
+
+#hist(coreIndex[,1])
+library(ggplot2)
+
+h.p <- ggplot(coreIndex, aes(coreIndex[,1])) +
+  geom_histogram(binwidth = 5,col=I("black"))+
+  #geom_freqpoly(binwidth = 5)+
+  geom_vline(xintercept = obs.dist,linetype = "longdash")+
+  theme_classic()+
+  theme(axis.line.x = element_line(colour = 'black', size=0.5, linetype='solid'),
+    axis.line.y = element_line(colour = 'black', size=0.5, linetype='solid'))+
+  labs(x=expression(D["core"]), y="Frequency" )
+h.p
+
+#Uppler limit of the 95% CI for the random permutations
+quantile(coreIndex[,1], 0.95)
+```
+

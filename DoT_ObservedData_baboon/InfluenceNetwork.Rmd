@@ -1,0 +1,157 @@
+---
+title: "Movement bias in mobile social troop: baboon group in Dehoop, South Africa"
+output: html_notebook
+---
+
+```{r, include=FALSE}
+library(reshape2)
+library(lme4)
+library(sjPlot)
+library(effects)
+library(MuMIn)
+library(qgraph)
+library(igraph)
+library(ggplot2)
+library(rethinking)
+```
+
+
+1.)  Visualize the network of influence amoung individuals in the group (influence estimated by Direction Matching): negative and positive influences
+
+```{r}
+a.s <- read.csv("data/influence_net_obs.csv", header=T,row.names=1)   
+m.a<-as.matrix(a.s)
+
+#full
+gg<-qgraph((m.a),nodeNames=c("Kenny","Alice",  "Alison",  "Catherine",  "Christina",	"Jane",	"Lynn",	"Olga",	"Rushenka",	"Sarah",	"Troy",	"Ulrike",	"Vickie"))
+
+```
+
+
+1.1)  Compare centrality and clustering of individuals in the group. Individuals are coded now as Male (M) or Female (F) and a rank score (Top ranking female: F1)
+
+```{r}
+gr<-as.igraph(gg)
+dat <- data.frame(name=c("M2","F11",  "F2",  "F9",  "F4",	"F10",	"F8",	"F7",	"F6",	"F1",	"M1",	"F5",	"F3"))
+dat$rank =              c(2,13,4,11,6,12,10,9,8,3,1,7,5)
+dat$InStrength <- strength(gr,mode="in")
+dat$OutStrength <- strength(gr,mode="out")
+#dat$Betweenness <- betweenness(gr,directed = T, weights=1/E(gr)$weight)
+datO <- dat[order(dat$rank),]
+dat2<- melt(datO[,-2], id = "name")
+positions <- c("M1","M2",  "F1",  "F2",  "F3",	"F4",	"F5",	"F6",	"F7",	"F8",	"F9",	"F10",	"F11")
+g <- ggplot(dat2, aes(x = value, y = name, group = variable))+
+  geom_point() +
+  geom_path() +
+  facet_grid(~variable, scales = "free") +
+  scale_y_discrete(limits=positions)+theme_bw() + ylab("Individual") + xlab("values")
+g
+```
+
+2)  Test the extent to which rank differences can explain influence amoung individuals
+
+```{r}
+#get data ready
+dy <- read.csv("data/diadic_LMM_sigBay.csv", header=T)   
+dy<-subset(dy,dy$delta.rank!=0) #remove giver and recivers that are the same rank (i.e. self loops)
+data.sub <- data.frame(influence = dy$att, id = dy$g, rankDiff = dy$delta.rank)
+
+#varying intercept model
+m.1 <- map2stan(
+  alist (
+    influence ~ dnorm(mu, sigma) ,
+    mu <- a + a_giver[id] + b*rankDiff,
+    a_giver[id] ~ dnorm(0, tau) ,
+    a ~ dnorm(0,0.1) ,
+    b ~ dnorm(0,0.1) ,
+    tau ~ dcauchy(0,0.5) ,
+    sigma ~ dcauchy(0, 0.5)
+  ),
+  data = data.sub, chains = 4, cores = 4, iter = 10000
+)
+
+#check model fit
+#plot(m.1)
+precis(m.1, depth = 2, digits = 4, prob=0.99)
+#plot(precis(m.1, depth = 2, digits = 4))
+#postcheck(m.1)
+
+#varying intercept-slope model
+#m.2 <- map2stan(
+#  alist (
+#    influence ~ dnorm(mu, sigma) ,
+#    mu <- a + a_giver[id] + (b + b_giver[id])*rankDiff ,
+#    a ~ dnorm(0,0.1) ,
+#    b ~ dnorm(0,0.1) ,
+#    c(a_giver,b_giver)[id] ~ dmvnorm2(0, tau, Rho) ,
+#    Rho ~ dlkjcorr(2) ,
+#    tau ~ dcauchy(0,0.5) ,
+#    sigma ~ dcauchy(0, 0.5)
+#  ),
+#  data = data.sub, chains = 4, cores = 4, iter = 10000
+#)#
+
+#compare
+#rethinking::compare(m.1,m.2)
+#plot(rethinking::compare(m.1,m.2))
+```
+
+Examine model predictions
+```{r}
+
+rankD.seq <- seq(from = min(data.sub$rankDiff), to = max(data.sub$rankDiff), by = 1)
+
+HPDI.95 <- function(x){
+  HPDI(x, prob = 0.95)
+}
+
+plot(influence ~ rankDiff , data=data.sub, col=rangi2)
+for(i in 1:13){
+  if(i!=10){
+    data.new <- data.frame(rankDiff =rankD.seq, id=i)
+    influence.link <- link(m.1, data.new)
+    influence.mean <- apply(influence.link,2,mean)
+    influence.HPDI <- apply(influence.link,2,HPDI.95)
+    lines(rankD.seq, influence.mean)
+    shade(influence.HPDI, rankD.seq)    
+  }
+}
+
+#post <- extract.samples(m.1)
+#dens(post$b)
+
+```
+
+Estimate effect size of the model (at different levels)
+```{r}
+
+#generate posterior sampling
+postSamples <- 1000
+post<-extract.samples(m.1,n=postSamples)
+
+#calculate preditction error at the level of the data point
+var.est <- data.frame(var=rep(0,postSamples))
+for(i in 1:postSamples){
+  data.sub$pred <-  post$a[i] + post$b[i]*data.sub$rankDiff + post$a_giver[i,data.sub$id]
+  data.sub$error<- data.sub$influence-data.sub$pred
+  var.est[i,1] <- var(data.sub$error)
+}
+
+r.square.1 <- 1-mean(var.est[,1])/var(data.sub$influence)
+r.square.1 
+
+#calculate prediction error at the level of the intercepts
+var.est.obs <- data.frame(var=rep(0,postSamples))
+var.est.error <- data.frame(var=rep(0,postSamples))
+for(i in 1:postSamples){
+  data.sub$obs  <-  post$a_giver[i,data.sub$id]
+  data.sub$pred <-  apply(post$a_giver[,data.sub$id],2,mean)
+  data.sub$error<-  data.sub$obs-data.sub$pred
+  var.est.error[i,1] <-  var(data.sub$error)
+  var.est.obs[i,1]   <-  var(data.sub$obs)
+}
+
+r.square.2 <- 1-mean(var.est.error[,1])/mean(var.est.obs[,1])
+r.square.2 
+
+```
